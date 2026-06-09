@@ -1,6 +1,6 @@
 # emailsherlock-go
 
-Official Go client for the [EmailSherlock](https://emailsherlock.com) email-verification API. Verify one address or a batch over HTTPS with an API key.
+Official Go client for the [EmailSherlock](https://emailsherlock.com) email-verification API. Verify one address or a batch over HTTPS with an API key. Get an API key at https://emailsherlock.com/api
 
 No third-party dependencies (standard library only). Go 1.21+.
 
@@ -76,6 +76,47 @@ for _, item := range batch.Results {
 | `CatchAll`   | bool    | host accepts mail for any local part                            |
 | `Score`      | float64 | 0–1 confidence, higher is safer to send to                      |
 | `Freshness`  | string  | `fresh` · `cached_recent` · `cached_stale_refreshed`            |
+
+Note on `Score`: the API sends `score: null` on `unknown` results, which decodes
+to `0` in Go. A score of `0` can therefore mean "no score".
+
+### v2 response fields
+
+Newer servers add these fields. They are pointers: `nil` means the field was
+absent (older server) or `null` (not measured), so you can tell that apart
+from a real `false`/`0`.
+
+| field         | type            | meaning                                                          |
+|---------------|-----------------|------------------------------------------------------------------|
+| `Deliverable` | `*bool`         | the mailbox accepts mail                                         |
+| `Reason`      | `*string`       | why you got this result, e.g. `mailbox_accepts`, `no_mx`, `catch_all_domain`, `verification_pending` |
+| `MXRecord`    | `*string`       | hostname of the best-priority MX record                          |
+| `FreeEmail`   | `*bool`         | the domain is a free-mail provider                               |
+| `CheckedAt`   | `*string`       | ISO 8601 timestamp of the underlying check                       |
+| `Domain`      | `*VerifyDomain` | domain-level reputation and mail-security details                |
+
+`VerifyDomain` carries the domain object:
+
+| field         | type       | meaning                                                              |
+|---------------|------------|----------------------------------------------------------------------|
+| `Name`        | `string`   | the domain                                                           |
+| `Types`       | `[]string` | `freemail` · `disposable` · `custom` · `company` · `government` · `education` · `public` · `isp` |
+| `Score`       | `*float64` | 0–100 domain reputation score                                        |
+| `SPF` / `DKIM` / `DMARC` | `*bool` | the record is present and valid                            |
+| `DMARCPolicy` | `*string`  | `none` · `quarantine` · `reject`                                     |
+| `MTASTS` / `TLSRPT` / `BIMI` / `DANE` | `*bool` | mail-security signals                          |
+| `Blacklists`  | `*int`     | number of DNS blacklists listing the domain's mail infrastructure    |
+| `DNSSEC`      | `*string`  | `secure` · `insecure` · `bogus`                                      |
+| `CAA`         | `*bool`    | a CAA record is present                                              |
+
+```go
+if result.Deliverable != nil && *result.Deliverable {
+	fmt.Println("safe to send")
+}
+if d := result.Domain; d != nil && d.DMARCPolicy != nil {
+	fmt.Println("DMARC policy:", *d.DMARCPolicy)
+}
+```
 
 ## Credits and rate limits
 
