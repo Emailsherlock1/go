@@ -1,0 +1,12 @@
+# Managed by sdk-gen/bin/generate.sh — the sugar layer / repo own these.
+go.mod
+go.sum
+README.md
+.gitignore
+.travis.yml
+git_push.sh
+docs/
+docs/**
+api/
+test/
+*_test.go

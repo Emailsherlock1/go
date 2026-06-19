@@ -2,7 +2,7 @@
 
 Official Go client for the [EmailSherlock](https://emailsherlock.com) email-verification API. Verify one address or a batch over HTTPS with an API key.
 
-No third-party dependencies (standard library only). Go 1.21+.
+Go 1.21+. The client and models are generated from the OpenAPI spec (sub-package `genclient`), with a thin hand-maintained layer for the ergonomics below. One small dependency (`gopkg.in/validator.v2`, pulled in by the generated models).
 
 ## Install
 
@@ -36,8 +36,8 @@ func main() {
 		panic(err)
 	}
 
-	fmt.Println(result.Result) // "valid"
-	fmt.Println(result.Score)  // 0.95
+	fmt.Println(result.Result)     // "valid"
+	fmt.Println(result.GetScore()) // 0.95 (Get* accessors on nullable fields)
 }
 ```
 
@@ -54,28 +54,67 @@ if err != nil {
 	return err
 }
 for _, item := range batch.Results {
-	if item.Failed() {
-		fmt.Println(item.Email, "failed:", item.Error)
+	if emailsherlock.IsVerifyResult(item) {
+		r := item.VerifyResultResponse
+		fmt.Println(r.Email, r.Result)
 	} else {
-		fmt.Println(item.Email, item.Result)
+		e := item.BatchItemError
+		fmt.Println(e.GetEmail(), "failed:", e.Error)
 	}
 }
 ```
 
+## Async jobs
+
+For large lists, submit a job and poll it. Every address runs the full pipeline
+including the SMTP probe, so the results carry definitive inbox verdicts:
+
+```go
+job, err := es.Verify.SubmitJob(ctx, []string{"a@acme.com", "b@acme.com"})
+for err == nil && job.Status != "completed" {
+	time.Sleep(2 * time.Second)
+	job, err = es.Verify.GetJob(ctx, job.Id)
+}
+```
+
+## Account status
+
+```go
+acc, err := es.Credits(ctx)
+acc.Credits.GetTotal() // spendable credits
+acc.Sandbox            // true on an es_test_ key
+```
+
+## Email-Guard events
+
+Record Email-Guard decision events (free, no credits). The full address is never
+sent, only the domain:
+
+```go
+err := es.Guard.RecordEvents(ctx, []map[string]interface{}{
+	{"domain": "mailinator.com", "verdict": "disposable", "action": "deny",
+		"reasons": []string{"disposable_provider"}, "degraded": false, "source": "local"},
+})
+```
+
 ## The result object
 
-`VerifyResult` mirrors the API JSON:
+`VerifyResult` is generated from the spec. Required fields are plain values;
+optional ones are nullable, read with `Get<Field>()` accessors:
 
-| field        | type    | meaning                                                         |
-|--------------|---------|-----------------------------------------------------------------|
-| `Email`      | string  | the address you sent                                            |
-| `Result`     | string  | `valid` · `invalid` · `catch_all` · `disposable` · `role` · `unknown` |
-| `MX`         | bool    | the domain has reachable MX records                             |
-| `Disposable` | bool    | throwaway / temporary-mail provider                             |
-| `Role`       | bool    | role address such as `info@` or `sales@`                        |
-| `CatchAll`   | bool    | host accepts mail for any local part                            |
-| `Score`      | float64 | 0–1 confidence, higher is safer to send to                      |
-| `Freshness`  | string  | `fresh` · `cached_recent` · `cached_stale_refreshed`            |
+| field          | meaning                                                         |
+|----------------|-----------------------------------------------------------------|
+| `Email`        | the address you sent                                            |
+| `Result`       | `valid` · `invalid` · `catch_all` · `disposable` · `role` · `unknown` |
+| `MX`           | the domain has reachable MX records                             |
+| `Disposable` · `Role` · `CatchAll` | throwaway / role / catch-all flags          |
+| `GetScore()`   | 0–1 confidence, higher is safer to send to                      |
+| `Freshness`    | `fresh` · `cached_recent` · `cached_stale_refreshed`            |
+| `GetDeliverable()` | proven via SMTP (true accepted, false provably bad, unset = unproven) |
+| `GetReason()`  | why the pipeline decided (`mailbox_accepts`, `greylisted`, …)   |
+| `GetMxRecord()` · `GetFreeEmail()` · `GetCheckedAt()` | primary MX host · freemail flag · ISO 8601 check time |
+| `Domain`       | domain-level intelligence (SPF, DKIM, DMARC, score, blacklists, …) |
+| `Decision`     | `Recommendation` (allow · deny · review) + `Reasons`            |
 
 ## Credits and rate limits
 
