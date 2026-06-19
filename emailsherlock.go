@@ -1,54 +1,75 @@
 // Package emailsherlock is the official Go client for the EmailSherlock
 // email-verification API. It verifies one address or a batch over HTTPS with
 // an API key. See https://emailsherlock.com/api/docs.
+//
+// The HTTP client and models are generated from the OpenAPI spec (sub-package
+// genclient); this package is a thin sugar layer over it: APIError with IsXxx
+// predicates, CreditsRemaining / LastRateLimit, an env-var key fallback, and
+// the Verify / Guard services.
 package emailsherlock
 
 import (
-	"bytes"
-	"context"
-	"encoding/json"
-	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Emailsherlock1/go/genclient"
 )
 
 const (
 	defaultBaseURL = "https://api.emailsherlock.com"
-	version        = "0.1.0"
+	version        = "0.2.0"
 )
 
 // Client talks to the EmailSherlock API. Create one with New. It is safe for
 // concurrent use by multiple goroutines.
 type Client struct {
-	apiKey     string
-	baseURL    string
-	httpClient *http.Client
-	userAgent  string
+	api    *genclient.APIClient
+	apiKey string
 
-	// Verify holds the verify endpoints.
+	// Verify holds the verify endpoints; Guard holds the Email-Guard endpoints.
 	Verify *VerifyService
+	Guard  *GuardService
 
 	mu               sync.Mutex
 	creditsRemaining *float64
 	rateLimit        RateLimit
 }
 
+// errNoKey is returned (without any network call) when the client has no API key.
+var errNoKey = &APIError{
+	StatusCode: 0,
+	Code:       "config_error",
+	Message:    "emailsherlock: no API key provided; pass it to New or set ES_KEY",
+}
+
+// ensureKey guards every endpoint so a missing key fails fast, not over the wire.
+func (c *Client) ensureKey() error {
+	if c.apiKey == "" {
+		return errNoKey
+	}
+	return nil
+}
+
 // Option configures a Client.
-type Option func(*Client)
+type Option func(*config)
+
+type config struct {
+	baseURL    string
+	httpClient *http.Client
+}
 
 // WithBaseURL overrides the API base URL (e.g. a staging host).
 func WithBaseURL(u string) Option {
-	return func(c *Client) { c.baseURL = strings.TrimRight(u, "/") }
+	return func(c *config) { c.baseURL = strings.TrimRight(u, "/") }
 }
 
 // WithHTTPClient injects a custom *http.Client (timeouts, transport, proxy).
 func WithHTTPClient(h *http.Client) Option {
-	return func(c *Client) { c.httpClient = h }
+	return func(c *config) { c.httpClient = h }
 }
 
 // New creates a Client. If apiKey is empty it falls back to the ES_KEY or
@@ -60,16 +81,24 @@ func New(apiKey string, opts ...Option) *Client {
 	if apiKey == "" {
 		apiKey = os.Getenv("EMAILSHERLOCK_API_KEY")
 	}
-	c := &Client{
-		apiKey:     apiKey,
+
+	cfg := &config{
 		baseURL:    defaultBaseURL,
 		httpClient: &http.Client{Timeout: 30 * time.Second},
-		userAgent:  "emailsherlock-go/" + version,
 	}
 	for _, o := range opts {
-		o(c)
+		o(cfg)
 	}
+
+	gc := genclient.NewConfiguration()
+	gc.Servers = genclient.ServerConfigurations{{URL: cfg.baseURL}}
+	gc.HTTPClient = cfg.httpClient
+	gc.UserAgent = "emailsherlock-go/" + version
+	gc.AddDefaultHeader("X-API-Key", apiKey)
+
+	c := &Client{api: genclient.NewAPIClient(gc), apiKey: apiKey}
 	c.Verify = &VerifyService{client: c}
+	c.Guard = &GuardService{client: c}
 	return c
 }
 
@@ -88,50 +117,17 @@ func (c *Client) LastRateLimit() RateLimit {
 	return c.rateLimit
 }
 
-func (c *Client) do(ctx context.Context, path string, payload, out any) error {
-	if c.apiKey == "" {
-		return &APIError{StatusCode: 0, Code: "config_error", Message: "no API key provided; pass it to New or set ES_KEY"}
+// do captures the response meta headers and maps any raw-client error to an
+// *APIError. Execute() returns (*T, *http.Response, error), which lines up with
+// this signature so call sites read `return do(c, ...Execute())`.
+func do[T any](c *Client, val *T, resp *http.Response, err error) (*T, error) {
+	if resp != nil {
+		c.captureMeta(resp.Header)
 	}
-
-	body, err := json.Marshal(payload)
 	if err != nil {
-		return fmt.Errorf("emailsherlock: encode request: %w", err)
+		return nil, c.toAPIError(resp, err)
 	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+path, bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("emailsherlock: build request: %w", err)
-	}
-	req.Header.Set("X-API-Key", c.apiKey)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", c.userAgent)
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("emailsherlock: request to %s failed: %w", path, err)
-	}
-	defer resp.Body.Close()
-
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("emailsherlock: read response: %w", err)
-	}
-
-	c.captureMeta(resp.Header)
-
-	if resp.StatusCode >= 400 {
-		var env errorEnvelope
-		_ = json.Unmarshal(raw, &env)
-		return errorFromResponse(resp.StatusCode, &env, resp.Header)
-	}
-
-	if out != nil {
-		if err := json.Unmarshal(raw, out); err != nil {
-			return fmt.Errorf("emailsherlock: decode response: %w", err)
-		}
-	}
-	return nil
+	return val, nil
 }
 
 func (c *Client) captureMeta(h http.Header) {
