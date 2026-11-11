@@ -188,3 +188,87 @@ func TestMissingKey(t *testing.T) {
 		t.Fatal("want error for missing key")
 	}
 }
+
+func TestClientIDHeader(t *testing.T) {
+	var got []string
+	var present []bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = append(got, r.Header.Get("X-Client-Id"))
+		_, ok := r.Header["X-Client-Id"]
+		present = append(present, ok)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"email":"a@b.com","result":"valid","mx":true,"disposable":false,"role":false,"catch_all":false,"score":0.95,"freshness":"fresh","decision":{"recommendation":"allow","reasons":["mailbox_accepts"]}}`))
+	}))
+	defer srv.Close()
+	ctx := context.Background()
+
+	plain := New("k", WithBaseURL(srv.URL))
+	if _, err := plain.Verify.Single(ctx, "a@b.com"); err != nil {
+		t.Fatal(err)
+	}
+	if present[0] || plain.ClientID() != 0 {
+		t.Errorf("header must be absent when unset: %v %d", present, plain.ClientID())
+	}
+
+	opt := New("k", WithBaseURL(srv.URL), WithClientID(42))
+	if _, err := opt.Verify.Single(ctx, "a@b.com"); err != nil {
+		t.Fatal(err)
+	}
+	if got[1] != "42" || opt.ClientID() != 42 {
+		t.Errorf("option: header %q id %d", got[1], opt.ClientID())
+	}
+
+	tenant := plain.WithClientID(7)
+	if _, err := tenant.Verify.Single(ctx, "a@b.com"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := plain.Verify.Single(ctx, "a@b.com"); err != nil {
+		t.Fatal(err)
+	}
+	if got[2] != "7" || tenant.ClientID() != 7 {
+		t.Errorf("method: header %q id %d", got[2], tenant.ClientID())
+	}
+	if present[3] || plain.ClientID() != 0 {
+		t.Errorf("original changed: %v %d", present, plain.ClientID())
+	}
+	if tenant.Verify.client == plain.Verify.client {
+		t.Errorf("derived client must be separate")
+	}
+}
+
+func TestClientIDNonPositive(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls++ }))
+	defer srv.Close()
+
+	for name, c := range map[string]*Client{
+		"option zero":     New("k", WithBaseURL(srv.URL), WithClientID(0)),
+		"option negative": New("k", WithBaseURL(srv.URL), WithClientID(-3)),
+		"method zero":     New("k", WithBaseURL(srv.URL)).WithClientID(0),
+	} {
+		_, err := c.Verify.Single(context.Background(), "a@b.com")
+		apiErr, ok := err.(*APIError)
+		if !ok || apiErr.Code != "config_error" {
+			t.Errorf("%s: want config_error, got %v", name, err)
+		}
+		if c.ClientID() != 0 {
+			t.Errorf("%s: ClientID should be 0", name)
+		}
+	}
+	if calls != 0 {
+		t.Errorf("no request may be sent, got %d", calls)
+	}
+}
+
+func TestClientNotFoundCode(t *testing.T) {
+	c, srv := newTestClient(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(404)
+		w.Write([]byte(`{"error":{"code":"client_not_found","message":"Unknown client"}}`))
+	})
+	defer srv.Close()
+	_, err := c.WithClientID(9).Verify.Single(context.Background(), "a@b.com")
+	apiErr, ok := err.(*APIError)
+	if !ok || apiErr.StatusCode != 404 || apiErr.Code != "client_not_found" {
+		t.Errorf("got %v", err)
+	}
+}

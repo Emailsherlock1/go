@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.0
+
+### Added
+
+- `WithClientID(id)` option and `(*Client).WithClientID(id)` method send the `X-Client-Id` header, so a provider key can work inside one of its tenants. `(*Client).ClientID()` reads it back. A non-positive id makes every call return a `config_error` without a request.
+
 ## 0.2.0
 
 The client and models are now generated from the EmailSherlock OpenAPI spec
