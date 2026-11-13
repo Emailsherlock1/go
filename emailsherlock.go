@@ -19,7 +19,7 @@ import (
 
 const (
 	defaultBaseURL = "https://api.emailsherlock.com"
-	version        = "0.1.0"
+	version        = "0.2.1"
 )
 
 // Client talks to the EmailSherlock API. Create one with New. It is safe for
