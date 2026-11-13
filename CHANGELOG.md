@@ -1,10 +1,10 @@
 # Changelog
 
-## 0.2.0
+## 0.3.0
 
 The client and models are now generated from the EmailSherlock OpenAPI spec
 (raw client in the `genclient` sub-package), with a thin hand-maintained sugar
-layer (the root `emailsherlock` package). The v0.1.0 surface mostly carries
+layer (the root `emailsherlock` package). The v0.2.0 surface mostly carries
 over; see the breaking notes below.
 
 ### Added
@@ -12,7 +12,7 @@ over; see the breaking notes below.
 - `es.Credits(ctx)` reads the account status (credit buckets, rate limit, plan, sandbox flag).
 - `es.Verify.SubmitJob(ctx, emails)` and `es.Verify.GetJob(ctx, id)` for asynchronous verification jobs.
 - `es.Guard.RecordEvents(ctx, events)` records Email-Guard decision events.
-- Richer result fields: `GetDeliverable()`, `GetReason()`, `GetMxRecord()`, `GetFreeEmail()`, `GetCheckedAt()`, `Domain` (full domain intelligence), and `Decision`.
+- `Decision` result field. The v2 fields from 0.2.0 are read with `Get<Field>()` accessors now, see the breaking notes.
 - `IsVerifyResult(item)` to tell batch entries apart.
 
 ### Changed (breaking, acceptable on 0.x)
@@ -22,6 +22,10 @@ over; see the breaking notes below.
 - One new dependency: `gopkg.in/validator.v2` (pulled in by the generated models; the client was previously dependency-free).
 - `APIError` (+ `IsUnauthorized` / `IsForbidden` / `IsInsufficientCredits` / `IsRateLimited` / `IsUnavailable`), `CreditsRemaining()`, `LastRateLimit()`, `WithBaseURL` / `WithHTTPClient`, and the `ES_KEY` / `EMAILSHERLOCK_API_KEY` fallback are unchanged.
 - The wire stays snake_case via json tags (no field renaming).
+
+## 0.2.0
+
+Verify response v2 fields on the hand-written client. `VerifyResult` gains `Deliverable`, `Reason`, `MXRecord`, `FreeEmail`, `CheckedAt` and a `Domain` (`*VerifyDomain`: types, trust score, SPF/DKIM/DMARC and other mail-security signals). They are pointers, `nil` when the server did not send the field or sent `null`.
 
 ## 0.1.0
 
