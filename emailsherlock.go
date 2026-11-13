@@ -1,6 +1,6 @@
 // Package emailsherlock is the official Go client for the EmailSherlock
 // email-verification API. It verifies one address or a batch over HTTPS with
-// an API key. See https://emailsherlock.com/api/docs.
+// an API key. See https://www.hostsherlock.com/api/docs.
 package emailsherlock
 
 import (
@@ -19,7 +19,7 @@ import (
 
 const (
 	defaultBaseURL = "https://api.emailsherlock.com"
-	version        = "0.1.0"
+	version        = "0.2.1"
 )
 
 // Client talks to the EmailSherlock API. Create one with New. It is safe for
