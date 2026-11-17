@@ -1,6 +1,6 @@
 // Package emailsherlock is the official Go client for the EmailSherlock
 // email-verification API. It verifies one address or a batch over HTTPS with
-// an API key. See https://emailsherlock.com/api/docs.
+// an API key. See https://www.hostsherlock.com/api/docs.
 //
 // The HTTP client and models are generated from the OpenAPI spec (sub-package
 // genclient); this package is a thin sugar layer over it: APIError with IsXxx
