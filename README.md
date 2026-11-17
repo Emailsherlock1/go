@@ -1,6 +1,6 @@
 # emailsherlock-go
 
-Official Go client for the [EmailSherlock](https://emailsherlock.com) email-verification API. Verify one address or a batch over HTTPS with an API key. Get an API key at https://emailsherlock.com/api. Want to try a single address by hand first? The free [email verification](https://emailsherlock.com/verify) tool runs the same checks in the browser.
+Official Go client for the [EmailSherlock](https://www.hostsherlock.com) email-verification API. Verify one address or a batch over HTTPS with an API key. Get an API key at https://www.hostsherlock.com/api. Want to try a single address by hand first? The free [email verification](https://www.hostsherlock.com/verify) tool runs the same checks in the browser.
 
 Go 1.21+. The client and models are generated from the OpenAPI spec (sub-package `genclient`), with a thin hand-maintained layer for the ergonomics below. One small dependency (`gopkg.in/validator.v2`, pulled in by the generated models).
 
@@ -196,4 +196,4 @@ es := emailsherlock.New(key,
 
 ## License
 
-MIT. Full API reference: https://emailsherlock.com/api/docs
+MIT. Full API reference: https://www.hostsherlock.com/api/docs
