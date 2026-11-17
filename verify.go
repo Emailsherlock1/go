@@ -1,84 +1,42 @@
 package emailsherlock
 
-import "context"
+import (
+	"context"
 
-// VerifyResult is the result for one address. It mirrors the API JSON.
-//
-// The pointer fields were added with the v2 response. They are absent on
-// older servers and nullable afterwards, so a nil pointer means "not
-// provided" rather than a zero value.
-type VerifyResult struct {
-	Email      string `json:"email"`
-	Result     string `json:"result"` // valid | invalid | catch_all | disposable | role | unknown
-	MX         bool   `json:"mx"`
-	Disposable bool   `json:"disposable"`
-	Role       bool   `json:"role"`
-	CatchAll   bool   `json:"catch_all"`
-	// Score is the 0-1 confidence. The API sends score:null on unknown
-	// results, which decodes to 0 here: 0 can mean a null score on
-	// unknown results.
-	Score     float64 `json:"score"`
-	Freshness string  `json:"freshness"` // fresh | cached_recent | cached_stale_refreshed
+	"github.com/Emailsherlock1/go/genclient"
+)
 
-	// Deliverable reports whether the mailbox accepts mail. Nil when the
-	// server could not decide (or predates the v2 response).
-	Deliverable *bool `json:"deliverable"`
-	// Reason explains the result. One of: bad_syntax, no_mx,
-	// mailbox_accepts, mailbox_not_found, disposable_provider,
-	// role_address, catch_all_domain, greylisted, smtp_timeout,
-	// smtp_unreachable, verification_pending.
-	Reason *string `json:"reason"`
-	// MXRecord is the hostname of the best-priority MX record.
-	MXRecord *string `json:"mx_record"`
-	// FreeEmail reports whether the domain is a free-mail provider.
-	FreeEmail *bool `json:"free_email"`
-	// CheckedAt is the ISO 8601 timestamp of the underlying check.
-	CheckedAt *string `json:"checked_at"`
-	// Domain carries domain-level reputation and mail-security details.
-	Domain *VerifyDomain `json:"domain"`
-}
+// Wire model aliases. The structs are generated from the OpenAPI spec in the
+// genclient sub-package; these aliases keep the public names short and let
+// callers import only this package.
+type (
+	// VerifyResult is the result for one address (was a hand-written struct in
+	// v0.1.0; now the generated model, which also carries deliverable, reason,
+	// mx_record, free_email, checked_at, domain and decision).
+	VerifyResult = genclient.VerifyResultResponse
+	// BatchResponse is the response of a batch call; Results holds one entry per
+	// submitted address, in order.
+	BatchResponse = genclient.VerifyBatchResponse
+	// BatchItem is one batch entry: either a VerifyResultResponse or a
+	// BatchItemError. Use IsVerifyResult to tell them apart.
+	BatchItem = genclient.VerifyBatchResponseResultsInner
+	// BatchItemError is a per-address failure inside a batch response.
+	BatchItemError = genclient.BatchItemError
+	// VerifyJob is an asynchronous verification job.
+	VerifyJob = genclient.VerifyJobResponse
+	// AccountStatus is the credit balance + rate-limit status behind a key.
+	AccountStatus = genclient.AccountStatusResponse
+	// DomainInfo is the domain-level intelligence attached to a result.
+	DomainInfo = genclient.VerifyDomainResponse
+	// Decision is the recommended action + reasons attached to a result.
+	Decision = genclient.VerifyDecisionResponse
+)
 
-// VerifyDomain is the domain object of a v2 verify response. Pointer fields
-// are nullable: nil means the signal was not measured.
-type VerifyDomain struct {
-	Name string `json:"name"`
-	// Types classifies the domain. Values: freemail, disposable, custom,
-	// company, government, education, public, isp.
-	Types []string `json:"types"`
-	// Score is the 0-100 domain reputation score.
-	Score *float64 `json:"score"`
-	SPF   *bool    `json:"spf"`
-	DKIM  *bool    `json:"dkim"`
-	DMARC *bool    `json:"dmarc"`
-	// DMARCPolicy is one of: none, quarantine, reject.
-	DMARCPolicy *string `json:"dmarc_policy"`
-	MTASTS      *bool   `json:"mta_sts"`
-	TLSRPT      *bool   `json:"tls_rpt"`
-	BIMI        *bool   `json:"bimi"`
-	DANE        *bool   `json:"dane"`
-	// Blacklists is the number of DNS blacklists currently listing the
-	// domain's mail infrastructure.
-	Blacklists *int `json:"blacklists"`
-	// DNSSEC is one of: secure, insecure, bogus.
-	DNSSEC *string `json:"dnssec"`
-	CAA    *bool   `json:"caa"`
-}
-
-// BatchItem is one entry of a batch response. It is either a verified result or
-// a per-address error. Call Failed to tell them apart.
-type BatchItem struct {
-	VerifyResult
-	// Error is non-empty when this address could not be processed:
-	// invalid_email | insufficient_credits | verify_unavailable.
-	Error string `json:"error,omitempty"`
-}
-
-// Failed reports whether this item carries a per-address error.
-func (b BatchItem) Failed() bool { return b.Error != "" }
-
-// BatchResponse is the response of a batch call.
-type BatchResponse struct {
-	Results []BatchItem `json:"results"`
+// IsVerifyResult reports whether a batch entry verified (true) or carries a
+// per-address error (false). On true, read item.VerifyResultResponse; on false,
+// item.BatchItemError.
+func IsVerifyResult(item BatchItem) bool {
+	return item.VerifyResultResponse != nil
 }
 
 // VerifyService groups the verify endpoints. Reached as Client.Verify.
@@ -86,28 +44,73 @@ type VerifyService struct {
 	client *Client
 }
 
-type singleRequest struct {
-	Email string `json:"email"`
-}
-
-type batchRequest struct {
-	Emails []string `json:"emails"`
-}
-
 // Single verifies one address.
 func (s *VerifyService) Single(ctx context.Context, email string) (*VerifyResult, error) {
-	out := &VerifyResult{}
-	if err := s.client.do(ctx, "/v1/verify/single", singleRequest{Email: email}, out); err != nil {
+	if err := s.client.ensureKey(); err != nil {
 		return nil, err
 	}
-	return out, nil
+	v, r, e := s.client.api.VerifyAPI.VerifySingle(ctx).
+		VerifySingleRequest(*genclient.NewVerifySingleRequest(email)).Execute()
+	return do(s.client, v, r, e)
 }
 
-// Batch verifies up to 100 addresses in one call.
+// Batch verifies a batch of addresses in one call.
 func (s *VerifyService) Batch(ctx context.Context, emails []string) (*BatchResponse, error) {
-	out := &BatchResponse{}
-	if err := s.client.do(ctx, "/v1/verify/batch", batchRequest{Emails: emails}, out); err != nil {
+	if err := s.client.ensureKey(); err != nil {
 		return nil, err
 	}
-	return out, nil
+	v, r, e := s.client.api.VerifyAPI.VerifyBatch(ctx).
+		VerifyBatchRequest(*genclient.NewVerifyBatchRequest(emails)).Execute()
+	return do(s.client, v, r, e)
+}
+
+// SubmitJob submits a list of addresses for asynchronous verification. Poll the
+// returned job's ID with GetJob until its status is "completed".
+func (s *VerifyService) SubmitJob(ctx context.Context, emails []string) (*VerifyJob, error) {
+	if err := s.client.ensureKey(); err != nil {
+		return nil, err
+	}
+	v, r, e := s.client.api.VerifyAPI.SubmitVerifyJob(ctx).
+		VerifyJobRequest(*genclient.NewVerifyJobRequest(emails)).Execute()
+	return do(s.client, v, r, e)
+}
+
+// GetJob reads the status and results of a verification job.
+func (s *VerifyService) GetJob(ctx context.Context, id string) (*VerifyJob, error) {
+	if err := s.client.ensureKey(); err != nil {
+		return nil, err
+	}
+	v, r, e := s.client.api.VerifyAPI.GetVerifyJob(ctx, id).Execute()
+	return do(s.client, v, r, e)
+}
+
+// Credits reads the credit balance and rate-limit status. Free: consumes no credits.
+func (c *Client) Credits(ctx context.Context) (*AccountStatus, error) {
+	if err := c.ensureKey(); err != nil {
+		return nil, err
+	}
+	v, r, e := c.api.AccountAPI.GetCredits(ctx).Execute()
+	return do(c, v, r, e)
+}
+
+// GuardService groups the Email-Guard endpoints. Reached as Client.Guard.
+type GuardService struct {
+	client *Client
+}
+
+// RecordEvents records a batch of Email-Guard decision events (free, no credits).
+// The full email address is never sent, only the domain.
+func (s *GuardService) RecordEvents(ctx context.Context, events []map[string]interface{}) error {
+	if err := s.client.ensureKey(); err != nil {
+		return err
+	}
+	resp, err := s.client.api.GuardAPI.RecordGuardEvents(ctx).
+		GuardEventsRequest(*genclient.NewGuardEventsRequest(events)).Execute()
+	if resp != nil {
+		s.client.captureMeta(resp.Header)
+	}
+	if err != nil {
+		return s.client.toAPIError(resp, err)
+	}
+	return nil
 }

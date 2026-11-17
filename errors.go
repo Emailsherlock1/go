@@ -1,9 +1,13 @@
 package emailsherlock
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
+
+	"github.com/Emailsherlock1/go/genclient"
 )
 
 // RateLimit reflects the per-key sliding-window state from the X-RateLimit-* headers.
@@ -112,4 +116,20 @@ func errorFromResponse(status int, env *errorEnvelope, h http.Header) *APIError 
 		}
 	}
 	return e
+}
+
+// toAPIError maps a raw-client failure to an *APIError. The generated client
+// returns a *GenericOpenAPIError carrying the response body, plus the
+// *http.Response for status + headers. A transport failure (no response)
+// becomes a network_error APIError.
+func (c *Client) toAPIError(resp *http.Response, err error) error {
+	if resp != nil && resp.StatusCode >= 400 {
+		var env errorEnvelope
+		var ge *genclient.GenericOpenAPIError
+		if errors.As(err, &ge) {
+			_ = json.Unmarshal(ge.Body(), &env)
+		}
+		return errorFromResponse(resp.StatusCode, &env, resp.Header)
+	}
+	return &APIError{StatusCode: 0, Code: "network_error", Message: "emailsherlock: " + err.Error()}
 }
