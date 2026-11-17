@@ -9,6 +9,7 @@ over; see the breaking notes below.
 
 ### Added
 
+- `WithClientID(id)` option and `(*Client).WithClientID(id)` method send the `X-Client-Id` header, so a provider key can work inside one of its tenants. `(*Client).ClientID()` reads it back. A non-positive id makes every call return a `config_error` without a request.
 - `es.Credits(ctx)` reads the account status (credit buckets, rate limit, plan, sandbox flag).
 - `es.Verify.SubmitJob(ctx, emails)` and `es.Verify.GetJob(ctx, id)` for asynchronous verification jobs.
 - `es.Guard.RecordEvents(ctx, events)` records Email-Guard decision events.
