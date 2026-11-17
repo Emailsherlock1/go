@@ -116,7 +116,7 @@ optional ones are nullable, read with `Get<Field>()` accessors:
 | `Domain`       | domain-level intelligence (SPF, DKIM, DMARC, score, blacklists, …) |
 | `Decision`     | `Recommendation` (allow · deny · review) + `Reasons`            |
 
-Every field and model is generated from the [OpenAPI spec](https://emailsherlock.com/api/docs); `Domain` is a `*VerifyDomainResponse` with its own `Get*` accessors (SPF, DKIM, DMARC, score, blacklists, …).
+Every field and model is generated from the [OpenAPI spec](https://www.hostsherlock.com/api/docs); `Domain` is a `*VerifyDomainResponse` with its own `Get*` accessors (SPF, DKIM, DMARC, score, blacklists, …).
 
 ## Credits and rate limits
 
