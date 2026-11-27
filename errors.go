@@ -17,8 +17,10 @@ type RateLimit struct {
 	Reset     *int64
 }
 
-// APIError is returned for every non-2xx response. Inspect StatusCode / Code, or
-// use the IsXxx helpers. Header-derived fields are populated where the API sends them.
+// APIError is returned for every non-2xx response, and with Code
+// "invalid_response" for a 2xx response this SDK version's models cannot read.
+// Inspect StatusCode / Code, or use the IsXxx helpers. Header-derived fields are
+// populated where the API sends them.
 type APIError struct {
 	StatusCode int
 	Code       string
@@ -131,16 +133,28 @@ func errorFromResponse(status int, env *errorEnvelope, h http.Header) *APIError 
 
 // toAPIError maps a raw-client failure to an *APIError. The generated client
 // returns a *GenericOpenAPIError carrying the response body, plus the
-// *http.Response for status + headers. A transport failure (no response)
-// becomes a network_error APIError.
+// *http.Response for status + headers. On a 2xx response the generated client
+// returns that error type only when it could not decode the body into its
+// models (a required property missing, a wrong type): that becomes an
+// invalid_response APIError with the response's status. Any other failure
+// (no response, a body that could not be read) becomes a network_error
+// APIError.
 func (c *Client) toAPIError(resp *http.Response, err error) error {
+	var ge *genclient.GenericOpenAPIError
+	isGenerated := errors.As(err, &ge)
 	if resp != nil && resp.StatusCode >= 400 {
 		var env errorEnvelope
-		var ge *genclient.GenericOpenAPIError
-		if errors.As(err, &ge) {
+		if isGenerated {
 			_ = json.Unmarshal(ge.Body(), &env)
 		}
 		return errorFromResponse(resp.StatusCode, &env, resp.Header)
+	}
+	if resp != nil && isGenerated {
+		return &APIError{
+			StatusCode: resp.StatusCode,
+			Code:       "invalid_response",
+			Message:    "the API response does not match this SDK version's models: " + err.Error(),
+		}
 	}
 	return &APIError{StatusCode: 0, Code: "network_error", Message: "emailsherlock: " + err.Error()}
 }

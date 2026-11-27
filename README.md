@@ -245,6 +245,13 @@ if err != nil {
 Other statuses (400, 404, 409, 422, 500) have no predicate; read `StatusCode`
 and `Code`.
 
+Two codes come without an error response from the API:
+
+| `Code`             | `StatusCode` | meaning                                                                 |
+|--------------------|--------------|-------------------------------------------------------------------------|
+| `invalid_response` | the 2xx sent | the API answered, but this SDK version's models cannot read the body (for example a required field missing); `Message` names the field |
+| `network_error`    | 0            | no response arrived (DNS, connection, timeout), or its body broke off   |
+
 ## Working for a tenant (`X-Client-Id`)
 
 A provider account's key can run a call inside one of its tenants by naming the
