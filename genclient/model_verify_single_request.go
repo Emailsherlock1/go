@@ -1,7 +1,7 @@
 /*
 EmailSherlock API
 
-Verify one email address or a batch over HTTPS with an API key. Authenticate with the X-API-Key header. Billing is user-level credits; each call returns the remaining balance in the X-Credits-Remaining header.  Sandbox: a key that starts with es_test_ runs in sandbox mode. It returns deterministic fixtured data on the same endpoints and response shape, never spends credits, and marks every response with X-Sandbox: true. The local part drives the verdict so you can test each branch: valid@, invalid@, catch-all@, disposable@, role@, unknown@ and pending@ pin a result (pending@ yields reason verification_pending, the deferred-batch outcome to retry later); ratelimit@ returns 429 and servererror@ returns 503 so you can exercise error handling. On the async jobs endpoint (POST /v1/verify/jobs), put async@ or slowjob@ in the batch and the sandbox reproduces the real submit-poll-complete lifecycle: the submit returns processing and the job completes after a few seconds, so you can build and test your polling loop before going live; without it, sandbox jobs complete immediately. Any other address maps to a stable result. Live keys start with es_live_. Full reference at https://emailsherlock.com/api/docs
+Verify one email address or a batch over HTTPS with an API key. Authenticate with the X-API-Key header. The API is available on the Pro plan and up. Two balances apply. Standard verify draws on your monthly validations (unlimited on a paid plan), reported in the X-Validations-Remaining header. Deep verify of the hard cases (catch-all and unknown addresses) draws probe credits, reported in the X-Probe-Credits-Remaining header. The earlier header names X-Verify-Free-Remaining and X-Credits-Remaining are still sent as aliases with the same values.  Sandbox: a key that starts with es_test_ runs in sandbox mode. It returns deterministic fixtured data on the same endpoints and response shape, never spends credits, and marks every response with X-Sandbox: true. The local part drives the verdict so you can test each branch: valid@, invalid@, catch-all@, disposable@, role@, unknown@ and pending@ pin a result (pending@ yields reason verification_pending, the deferred-batch outcome to retry later); ratelimit@ returns 429 and servererror@ returns 503 so you can exercise error handling. On the async jobs endpoint (POST /v1/verify/jobs), put async@ or slowjob@ in the batch and the sandbox reproduces the real submit-poll-complete lifecycle: the submit returns processing and the job completes after a few seconds, so you can build and test your polling loop before going live; without it, sandbox jobs complete immediately. Any other address maps to a stable result. On POST /v1/impersonation/analyze the sandbox runs the real scoring without our domain records, so domain age, blocklist and DNSBL reasons never appear. Live keys start with es_live_.  Provider accounts: a key of a provider account can work in one of your customer accounts. Send the X-Client-Id header with the numeric id of that customer account, and the call runs in it: usage is booked to that account, the way it is when you work in that account in the dashboard, and jobs and results are stored there. Poll a job with the same header you submitted it with. Without the header the call works in the provider account. The id is in the ID column of your customer list under Customers (/admin/my/clients), and next to the name on each customer's page, each with a copy button. An id your key cannot reach returns 404 client_not_found, the same answer as an id that does not exist. On a key of any other account the header returns 400 client_id_not_allowed. Full reference at https://www.hostsherlock.com/api/docs
 
 API version: 1.0.0
 */
@@ -23,6 +23,10 @@ var _ MappedNullable = &VerifySingleRequest{}
 type VerifySingleRequest struct {
 	// The address to verify.
 	Email string `json:"email"`
+	// Scan depth. quick: syntax + DNS/MX only, no SMTP probe (0 credits). standard: + SMTP RCPT probe, default (1 credit). enhanced: + catch-all detection via random RCPT probe (3 credits; known catch-all hosts are billed at the standard rate). Omitting mode is identical to standard.
+	Mode NullableString `json:"mode,omitempty"`
+	// Return immediately without waiting for the live SMTP probe. The address is checked at DNS/MX depth; when a mailbox probe is still needed the response carries reason \"verification_pending\" while the SMTP check runs in the background. To read the verdict, call this endpoint again for the same address after roughly 1 to 3 seconds: the follow-up is a cache hit with the resolved result. Keep polling until reason is no longer \"verification_pending\". Each call is billed (standard verify is free on a paid plan, so polling costs nothing there). Billing is otherwise unchanged: async only changes when the result is delivered, not what you pay, so enhanced mode still runs its catch-all probe in the background and is billed at the enhanced rate. For large async batches, prefer POST /v1/verify/jobs, which returns a job id you poll with GET /v1/verify/jobs/{id} and whose status polls are free. Ignored for quick mode (already DNS-only). Default false.
+	Async NullableBool `json:"async,omitempty"`
 }
 
 type _VerifySingleRequest VerifySingleRequest
@@ -34,6 +38,8 @@ type _VerifySingleRequest VerifySingleRequest
 func NewVerifySingleRequest(email string) *VerifySingleRequest {
 	this := VerifySingleRequest{}
 	this.Email = email
+	var async bool = false
+	this.Async = *NewNullableBool(&async)
 	return &this
 }
 
@@ -42,6 +48,8 @@ func NewVerifySingleRequest(email string) *VerifySingleRequest {
 // but it doesn't guarantee that properties required by API are set
 func NewVerifySingleRequestWithDefaults() *VerifySingleRequest {
 	this := VerifySingleRequest{}
+	var async bool = false
+	this.Async = *NewNullableBool(&async)
 	return &this
 }
 
@@ -69,6 +77,90 @@ func (o *VerifySingleRequest) SetEmail(v string) {
 	o.Email = v
 }
 
+// GetMode returns the Mode field value if set, zero value otherwise (both if not set or set to explicit null).
+func (o *VerifySingleRequest) GetMode() string {
+	if o == nil || IsNil(o.Mode.Get()) {
+		var ret string
+		return ret
+	}
+	return *o.Mode.Get()
+}
+
+// GetModeOk returns a tuple with the Mode field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+// NOTE: If the value is an explicit nil, `nil, true` will be returned
+func (o *VerifySingleRequest) GetModeOk() (*string, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return o.Mode.Get(), o.Mode.IsSet()
+}
+
+// HasMode returns a boolean if a field has been set.
+func (o *VerifySingleRequest) HasMode() bool {
+	if o != nil && o.Mode.IsSet() {
+		return true
+	}
+
+	return false
+}
+
+// SetMode gets a reference to the given NullableString and assigns it to the Mode field.
+func (o *VerifySingleRequest) SetMode(v string) {
+	o.Mode.Set(&v)
+}
+// SetModeNil sets the value for Mode to be an explicit nil
+func (o *VerifySingleRequest) SetModeNil() {
+	o.Mode.Set(nil)
+}
+
+// UnsetMode ensures that no value is present for Mode, not even an explicit nil
+func (o *VerifySingleRequest) UnsetMode() {
+	o.Mode.Unset()
+}
+
+// GetAsync returns the Async field value if set, zero value otherwise (both if not set or set to explicit null).
+func (o *VerifySingleRequest) GetAsync() bool {
+	if o == nil || IsNil(o.Async.Get()) {
+		var ret bool
+		return ret
+	}
+	return *o.Async.Get()
+}
+
+// GetAsyncOk returns a tuple with the Async field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+// NOTE: If the value is an explicit nil, `nil, true` will be returned
+func (o *VerifySingleRequest) GetAsyncOk() (*bool, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return o.Async.Get(), o.Async.IsSet()
+}
+
+// HasAsync returns a boolean if a field has been set.
+func (o *VerifySingleRequest) HasAsync() bool {
+	if o != nil && o.Async.IsSet() {
+		return true
+	}
+
+	return false
+}
+
+// SetAsync gets a reference to the given NullableBool and assigns it to the Async field.
+func (o *VerifySingleRequest) SetAsync(v bool) {
+	o.Async.Set(&v)
+}
+// SetAsyncNil sets the value for Async to be an explicit nil
+func (o *VerifySingleRequest) SetAsyncNil() {
+	o.Async.Set(nil)
+}
+
+// UnsetAsync ensures that no value is present for Async, not even an explicit nil
+func (o *VerifySingleRequest) UnsetAsync() {
+	o.Async.Unset()
+}
+
 func (o VerifySingleRequest) MarshalJSON() ([]byte, error) {
 	toSerialize,err := o.ToMap()
 	if err != nil {
@@ -80,6 +172,12 @@ func (o VerifySingleRequest) MarshalJSON() ([]byte, error) {
 func (o VerifySingleRequest) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
 	toSerialize["email"] = o.Email
+	if o.Mode.IsSet() {
+		toSerialize["mode"] = o.Mode.Get()
+	}
+	if o.Async.IsSet() {
+		toSerialize["async"] = o.Async.Get()
+	}
 	return toSerialize, nil
 }
 

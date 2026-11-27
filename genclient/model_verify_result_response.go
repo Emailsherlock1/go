@@ -1,7 +1,7 @@
 /*
 EmailSherlock API
 
-Verify one email address or a batch over HTTPS with an API key. Authenticate with the X-API-Key header. Billing is user-level credits; each call returns the remaining balance in the X-Credits-Remaining header.  Sandbox: a key that starts with es_test_ runs in sandbox mode. It returns deterministic fixtured data on the same endpoints and response shape, never spends credits, and marks every response with X-Sandbox: true. The local part drives the verdict so you can test each branch: valid@, invalid@, catch-all@, disposable@, role@, unknown@ and pending@ pin a result (pending@ yields reason verification_pending, the deferred-batch outcome to retry later); ratelimit@ returns 429 and servererror@ returns 503 so you can exercise error handling. On the async jobs endpoint (POST /v1/verify/jobs), put async@ or slowjob@ in the batch and the sandbox reproduces the real submit-poll-complete lifecycle: the submit returns processing and the job completes after a few seconds, so you can build and test your polling loop before going live; without it, sandbox jobs complete immediately. Any other address maps to a stable result. Live keys start with es_live_. Full reference at https://emailsherlock.com/api/docs
+Verify one email address or a batch over HTTPS with an API key. Authenticate with the X-API-Key header. The API is available on the Pro plan and up. Two balances apply. Standard verify draws on your monthly validations (unlimited on a paid plan), reported in the X-Validations-Remaining header. Deep verify of the hard cases (catch-all and unknown addresses) draws probe credits, reported in the X-Probe-Credits-Remaining header. The earlier header names X-Verify-Free-Remaining and X-Credits-Remaining are still sent as aliases with the same values.  Sandbox: a key that starts with es_test_ runs in sandbox mode. It returns deterministic fixtured data on the same endpoints and response shape, never spends credits, and marks every response with X-Sandbox: true. The local part drives the verdict so you can test each branch: valid@, invalid@, catch-all@, disposable@, role@, unknown@ and pending@ pin a result (pending@ yields reason verification_pending, the deferred-batch outcome to retry later); ratelimit@ returns 429 and servererror@ returns 503 so you can exercise error handling. On the async jobs endpoint (POST /v1/verify/jobs), put async@ or slowjob@ in the batch and the sandbox reproduces the real submit-poll-complete lifecycle: the submit returns processing and the job completes after a few seconds, so you can build and test your polling loop before going live; without it, sandbox jobs complete immediately. Any other address maps to a stable result. On POST /v1/impersonation/analyze the sandbox runs the real scoring without our domain records, so domain age, blocklist and DNSBL reasons never appear. Live keys start with es_live_.  Provider accounts: a key of a provider account can work in one of your customer accounts. Send the X-Client-Id header with the numeric id of that customer account, and the call runs in it: usage is booked to that account, the way it is when you work in that account in the dashboard, and jobs and results are stored there. Poll a job with the same header you submitted it with. Without the header the call works in the provider account. The id is in the ID column of your customer list under Customers (/admin/my/clients), and next to the name on each customer's page, each with a copy button. An id your key cannot reach returns 404 client_not_found, the same answer as an id that does not exist. On a key of any other account the header returns 400 client_id_not_allowed. Full reference at https://www.hostsherlock.com/api/docs
 
 API version: 1.0.0
 */
@@ -27,11 +27,11 @@ type VerifyResultResponse struct {
 	Result string `json:"result"`
 	// Proven deliverability: true only after the mailbox accepted RCPT TO, false only when the address provably fails (bad syntax, no MX, hard reject). Null means unproven, not bad: disposable, role and catch_all short-circuit before the SMTP probe.
 	Deliverable NullableBool `json:"deliverable,omitempty"`
-	// Why the pipeline decided. greylisted, smtp_timeout, smtp_unreachable and verification_pending are transient: retry the address later. Null on results cached before reasons existed.
+	// Why the pipeline decided. greylisted, smtp_timeout, smtp_unreachable, smtp_throttled, probe_suppressed, probe_budget_exhausted and verification_pending all leave the address unproven. smtp_throttled means our own per-MX rate limit refused the connection, so nothing was asked of the mail server and a retry a few minutes later usually gets an answer. probe_suppressed means we have undertaken not to open a connection to that target at all, so a retry returns the same thing until that changes; nothing was asked of the mail server, so the lookup is refunded. The one exception is a target on our curated trap registry (spam_trap_type = known_trap_domain), which is billed. Read spam_trap_type for that, not the decision object: a target our heuristic flagged (reputation_heuristic) comes back review + spam_trap just the same and is refunded. probe_budget_exhausted belongs to the anonymous web tool, which runs on a shared daily probe budget; an API key is never subject to it, so you will not see it here. Null on results cached before reasons existed.
 	Reason NullableString `json:"reason,omitempty"`
-	// The domain has reachable MX records.
+	// DNS found a mail route for the domain. This is a pure DNS answer, not a connection test: reachability of the host is never probed here. True also covers the RFC 5321 fallback where the domain publishes no MX at all and its A or AAAA record acts as the implicit mail exchanger, so true is not proof that MX records exist. On a cached_recent result stored before this flag was recorded per address, true may be inferred from the presence of a stored mail host rather than observed, so read it together with reason when reason is no_mx. False means no MX, A or AAAA record, or that the check stopped before the DNS lookup (bad syntax, or a degraded response), so false is not proof that the domain cannot receive mail.
 	Mx bool `json:"mx"`
-	// The primary MX host, when one was resolved during this check.
+	// The primary mail exchanger resolved during this check. On the A/AAAA fallback described under mx, this is the bare domain rather than a published MX host. Null when freshness is cached_recent, because the host list is not stored alongside the cached verdict, and null when nothing was resolved. A null here therefore does not contradict mx being true, and is not evidence that the domain has no mail route.
 	MxRecord NullableString `json:"mx_record,omitempty"`
 	// Throwaway / temporary-mail provider.
 	Disposable bool `json:"disposable"`
@@ -41,15 +41,31 @@ type VerifyResultResponse struct {
 	CatchAll bool `json:"catch_all"`
 	// The domain is a freemail provider (gmail.com, web.de, ...). Null when the domain is not classified yet.
 	FreeEmail NullableBool `json:"free_email,omitempty"`
+	// The address sits on a relay / forwarding / alias-masking service (SimpleLogin, Apple Hide My Email, Cloudflare Email Routing, ...). The address is deliverable and reaches a real person, it is just masked, so this never changes the verdict or decision. Use it to apply your own policy on masked senders.
+	Relay bool `json:"relay"`
+	// Name of the relay provider when relay is true, null otherwise.
+	RelayProvider NullableString `json:"relay_provider,omitempty"`
+	// The address is on a parked or for-sale domain. Informational only: it never changes the verdict, but a parked domain rarely runs a real mailbox.
+	Parked bool `json:"parked"`
+	// The mail host is a known or suspected spam trap. Informational only: it never changes the verdict, and it is never a hard block. But sending to a trap hurts your sender reputation, so the recommendation drops to review. See spam_trap_type for how it was identified.
+	SpamTrap bool `json:"spam_trap"`
+	// How the trap was identified: known_trap_domain (the mail host is on our curated trap registry) or reputation_heuristic (it matched a conservative parked + spam-list heuristic). Null when spam_trap is false.
+	SpamTrapType NullableString `json:"spam_trap_type,omitempty"`
+	// A corrected address when the domain looks like a typo of a high-volume domain (gmial.com -> jane@gmail.com). Null when nothing looks mistyped. Advisory only: it never changes the verdict, so show it as a \"did you mean\" hint and let the sender decide.
+	SuggestedCorrection NullableString `json:"suggested_correction,omitempty"`
+	// Enhanced scan only: the granular mailbox state read from the SMTP reply (mailbox_full, mailbox_disabled, mailbox_not_found, greylist_deferred, policy_block, accepted). Null on Quick / Standard scans, which do not run the deep probe. Explains the verdict, never overrides it.
+	SmtpDiagnosis NullableString `json:"smtp_diagnosis,omitempty"`
 	// 0-1 confidence, higher is safer to send to.
 	Score NullableFloat32 `json:"score,omitempty"`
 	// How recent the underlying data is.
 	Freshness string `json:"freshness"`
 	// When the underlying verification ran (ISO 8601). On cached results this is the original check, not the request time.
 	CheckedAt NullableString `json:"checked_at,omitempty"`
-	// Domain-level intelligence. Null when the domain has not been crawled yet.
+	// Domain-level intelligence. Null when we hold no crawl data for the domain: either it has not been crawled yet, or it is itself a public suffix (co.uk, github.io, a dynamic-DNS root such as kozow.com), which we do not crawl as one domain because unrelated owners share it.
 	Domain NullableVerifyDomainResponse `json:"domain,omitempty"`
 	Decision VerifyDecisionResponse `json:"decision"`
+	// Email-Guard only: true when your monthly remote-decision quota is used up and the Verify API declined to run a remote check. The SDK falls back to its local checks (syntax + the bundled disposable list) until the quota resets at the start of next month. false on every normal response. See docs/decisions/email-guard.md.
+	Degraded *bool `json:"degraded,omitempty"`
 }
 
 type _VerifyResultResponse VerifyResultResponse
@@ -58,7 +74,7 @@ type _VerifyResultResponse VerifyResultResponse
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewVerifyResultResponse(email string, result string, mx bool, disposable bool, role bool, catchAll bool, freshness string, decision VerifyDecisionResponse) *VerifyResultResponse {
+func NewVerifyResultResponse(email string, result string, mx bool, disposable bool, role bool, catchAll bool, relay bool, parked bool, spamTrap bool, freshness string, decision VerifyDecisionResponse) *VerifyResultResponse {
 	this := VerifyResultResponse{}
 	this.Email = email
 	this.Result = result
@@ -66,8 +82,13 @@ func NewVerifyResultResponse(email string, result string, mx bool, disposable bo
 	this.Disposable = disposable
 	this.Role = role
 	this.CatchAll = catchAll
+	this.Relay = relay
+	this.Parked = parked
+	this.SpamTrap = spamTrap
 	this.Freshness = freshness
 	this.Decision = decision
+	var degraded bool = false
+	this.Degraded = &degraded
 	return &this
 }
 
@@ -76,6 +97,8 @@ func NewVerifyResultResponse(email string, result string, mx bool, disposable bo
 // but it doesn't guarantee that properties required by API are set
 func NewVerifyResultResponseWithDefaults() *VerifyResultResponse {
 	this := VerifyResultResponse{}
+	var degraded bool = false
+	this.Degraded = &degraded
 	return &this
 }
 
@@ -391,6 +414,246 @@ func (o *VerifyResultResponse) UnsetFreeEmail() {
 	o.FreeEmail.Unset()
 }
 
+// GetRelay returns the Relay field value
+func (o *VerifyResultResponse) GetRelay() bool {
+	if o == nil {
+		var ret bool
+		return ret
+	}
+
+	return o.Relay
+}
+
+// GetRelayOk returns a tuple with the Relay field value
+// and a boolean to check if the value has been set.
+func (o *VerifyResultResponse) GetRelayOk() (*bool, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return &o.Relay, true
+}
+
+// SetRelay sets field value
+func (o *VerifyResultResponse) SetRelay(v bool) {
+	o.Relay = v
+}
+
+// GetRelayProvider returns the RelayProvider field value if set, zero value otherwise (both if not set or set to explicit null).
+func (o *VerifyResultResponse) GetRelayProvider() string {
+	if o == nil || IsNil(o.RelayProvider.Get()) {
+		var ret string
+		return ret
+	}
+	return *o.RelayProvider.Get()
+}
+
+// GetRelayProviderOk returns a tuple with the RelayProvider field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+// NOTE: If the value is an explicit nil, `nil, true` will be returned
+func (o *VerifyResultResponse) GetRelayProviderOk() (*string, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return o.RelayProvider.Get(), o.RelayProvider.IsSet()
+}
+
+// HasRelayProvider returns a boolean if a field has been set.
+func (o *VerifyResultResponse) HasRelayProvider() bool {
+	if o != nil && o.RelayProvider.IsSet() {
+		return true
+	}
+
+	return false
+}
+
+// SetRelayProvider gets a reference to the given NullableString and assigns it to the RelayProvider field.
+func (o *VerifyResultResponse) SetRelayProvider(v string) {
+	o.RelayProvider.Set(&v)
+}
+// SetRelayProviderNil sets the value for RelayProvider to be an explicit nil
+func (o *VerifyResultResponse) SetRelayProviderNil() {
+	o.RelayProvider.Set(nil)
+}
+
+// UnsetRelayProvider ensures that no value is present for RelayProvider, not even an explicit nil
+func (o *VerifyResultResponse) UnsetRelayProvider() {
+	o.RelayProvider.Unset()
+}
+
+// GetParked returns the Parked field value
+func (o *VerifyResultResponse) GetParked() bool {
+	if o == nil {
+		var ret bool
+		return ret
+	}
+
+	return o.Parked
+}
+
+// GetParkedOk returns a tuple with the Parked field value
+// and a boolean to check if the value has been set.
+func (o *VerifyResultResponse) GetParkedOk() (*bool, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return &o.Parked, true
+}
+
+// SetParked sets field value
+func (o *VerifyResultResponse) SetParked(v bool) {
+	o.Parked = v
+}
+
+// GetSpamTrap returns the SpamTrap field value
+func (o *VerifyResultResponse) GetSpamTrap() bool {
+	if o == nil {
+		var ret bool
+		return ret
+	}
+
+	return o.SpamTrap
+}
+
+// GetSpamTrapOk returns a tuple with the SpamTrap field value
+// and a boolean to check if the value has been set.
+func (o *VerifyResultResponse) GetSpamTrapOk() (*bool, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return &o.SpamTrap, true
+}
+
+// SetSpamTrap sets field value
+func (o *VerifyResultResponse) SetSpamTrap(v bool) {
+	o.SpamTrap = v
+}
+
+// GetSpamTrapType returns the SpamTrapType field value if set, zero value otherwise (both if not set or set to explicit null).
+func (o *VerifyResultResponse) GetSpamTrapType() string {
+	if o == nil || IsNil(o.SpamTrapType.Get()) {
+		var ret string
+		return ret
+	}
+	return *o.SpamTrapType.Get()
+}
+
+// GetSpamTrapTypeOk returns a tuple with the SpamTrapType field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+// NOTE: If the value is an explicit nil, `nil, true` will be returned
+func (o *VerifyResultResponse) GetSpamTrapTypeOk() (*string, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return o.SpamTrapType.Get(), o.SpamTrapType.IsSet()
+}
+
+// HasSpamTrapType returns a boolean if a field has been set.
+func (o *VerifyResultResponse) HasSpamTrapType() bool {
+	if o != nil && o.SpamTrapType.IsSet() {
+		return true
+	}
+
+	return false
+}
+
+// SetSpamTrapType gets a reference to the given NullableString and assigns it to the SpamTrapType field.
+func (o *VerifyResultResponse) SetSpamTrapType(v string) {
+	o.SpamTrapType.Set(&v)
+}
+// SetSpamTrapTypeNil sets the value for SpamTrapType to be an explicit nil
+func (o *VerifyResultResponse) SetSpamTrapTypeNil() {
+	o.SpamTrapType.Set(nil)
+}
+
+// UnsetSpamTrapType ensures that no value is present for SpamTrapType, not even an explicit nil
+func (o *VerifyResultResponse) UnsetSpamTrapType() {
+	o.SpamTrapType.Unset()
+}
+
+// GetSuggestedCorrection returns the SuggestedCorrection field value if set, zero value otherwise (both if not set or set to explicit null).
+func (o *VerifyResultResponse) GetSuggestedCorrection() string {
+	if o == nil || IsNil(o.SuggestedCorrection.Get()) {
+		var ret string
+		return ret
+	}
+	return *o.SuggestedCorrection.Get()
+}
+
+// GetSuggestedCorrectionOk returns a tuple with the SuggestedCorrection field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+// NOTE: If the value is an explicit nil, `nil, true` will be returned
+func (o *VerifyResultResponse) GetSuggestedCorrectionOk() (*string, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return o.SuggestedCorrection.Get(), o.SuggestedCorrection.IsSet()
+}
+
+// HasSuggestedCorrection returns a boolean if a field has been set.
+func (o *VerifyResultResponse) HasSuggestedCorrection() bool {
+	if o != nil && o.SuggestedCorrection.IsSet() {
+		return true
+	}
+
+	return false
+}
+
+// SetSuggestedCorrection gets a reference to the given NullableString and assigns it to the SuggestedCorrection field.
+func (o *VerifyResultResponse) SetSuggestedCorrection(v string) {
+	o.SuggestedCorrection.Set(&v)
+}
+// SetSuggestedCorrectionNil sets the value for SuggestedCorrection to be an explicit nil
+func (o *VerifyResultResponse) SetSuggestedCorrectionNil() {
+	o.SuggestedCorrection.Set(nil)
+}
+
+// UnsetSuggestedCorrection ensures that no value is present for SuggestedCorrection, not even an explicit nil
+func (o *VerifyResultResponse) UnsetSuggestedCorrection() {
+	o.SuggestedCorrection.Unset()
+}
+
+// GetSmtpDiagnosis returns the SmtpDiagnosis field value if set, zero value otherwise (both if not set or set to explicit null).
+func (o *VerifyResultResponse) GetSmtpDiagnosis() string {
+	if o == nil || IsNil(o.SmtpDiagnosis.Get()) {
+		var ret string
+		return ret
+	}
+	return *o.SmtpDiagnosis.Get()
+}
+
+// GetSmtpDiagnosisOk returns a tuple with the SmtpDiagnosis field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+// NOTE: If the value is an explicit nil, `nil, true` will be returned
+func (o *VerifyResultResponse) GetSmtpDiagnosisOk() (*string, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return o.SmtpDiagnosis.Get(), o.SmtpDiagnosis.IsSet()
+}
+
+// HasSmtpDiagnosis returns a boolean if a field has been set.
+func (o *VerifyResultResponse) HasSmtpDiagnosis() bool {
+	if o != nil && o.SmtpDiagnosis.IsSet() {
+		return true
+	}
+
+	return false
+}
+
+// SetSmtpDiagnosis gets a reference to the given NullableString and assigns it to the SmtpDiagnosis field.
+func (o *VerifyResultResponse) SetSmtpDiagnosis(v string) {
+	o.SmtpDiagnosis.Set(&v)
+}
+// SetSmtpDiagnosisNil sets the value for SmtpDiagnosis to be an explicit nil
+func (o *VerifyResultResponse) SetSmtpDiagnosisNil() {
+	o.SmtpDiagnosis.Set(nil)
+}
+
+// UnsetSmtpDiagnosis ensures that no value is present for SmtpDiagnosis, not even an explicit nil
+func (o *VerifyResultResponse) UnsetSmtpDiagnosis() {
+	o.SmtpDiagnosis.Unset()
+}
+
 // GetScore returns the Score field value if set, zero value otherwise (both if not set or set to explicit null).
 func (o *VerifyResultResponse) GetScore() float32 {
 	if o == nil || IsNil(o.Score.Get()) {
@@ -565,6 +828,38 @@ func (o *VerifyResultResponse) SetDecision(v VerifyDecisionResponse) {
 	o.Decision = v
 }
 
+// GetDegraded returns the Degraded field value if set, zero value otherwise.
+func (o *VerifyResultResponse) GetDegraded() bool {
+	if o == nil || IsNil(o.Degraded) {
+		var ret bool
+		return ret
+	}
+	return *o.Degraded
+}
+
+// GetDegradedOk returns a tuple with the Degraded field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *VerifyResultResponse) GetDegradedOk() (*bool, bool) {
+	if o == nil || IsNil(o.Degraded) {
+		return nil, false
+	}
+	return o.Degraded, true
+}
+
+// HasDegraded returns a boolean if a field has been set.
+func (o *VerifyResultResponse) HasDegraded() bool {
+	if o != nil && !IsNil(o.Degraded) {
+		return true
+	}
+
+	return false
+}
+
+// SetDegraded gets a reference to the given bool and assigns it to the Degraded field.
+func (o *VerifyResultResponse) SetDegraded(v bool) {
+	o.Degraded = &v
+}
+
 func (o VerifyResultResponse) MarshalJSON() ([]byte, error) {
 	toSerialize,err := o.ToMap()
 	if err != nil {
@@ -593,6 +888,21 @@ func (o VerifyResultResponse) ToMap() (map[string]interface{}, error) {
 	if o.FreeEmail.IsSet() {
 		toSerialize["free_email"] = o.FreeEmail.Get()
 	}
+	toSerialize["relay"] = o.Relay
+	if o.RelayProvider.IsSet() {
+		toSerialize["relay_provider"] = o.RelayProvider.Get()
+	}
+	toSerialize["parked"] = o.Parked
+	toSerialize["spam_trap"] = o.SpamTrap
+	if o.SpamTrapType.IsSet() {
+		toSerialize["spam_trap_type"] = o.SpamTrapType.Get()
+	}
+	if o.SuggestedCorrection.IsSet() {
+		toSerialize["suggested_correction"] = o.SuggestedCorrection.Get()
+	}
+	if o.SmtpDiagnosis.IsSet() {
+		toSerialize["smtp_diagnosis"] = o.SmtpDiagnosis.Get()
+	}
 	if o.Score.IsSet() {
 		toSerialize["score"] = o.Score.Get()
 	}
@@ -604,6 +914,9 @@ func (o VerifyResultResponse) ToMap() (map[string]interface{}, error) {
 		toSerialize["domain"] = o.Domain.Get()
 	}
 	toSerialize["decision"] = o.Decision
+	if !IsNil(o.Degraded) {
+		toSerialize["degraded"] = o.Degraded
+	}
 	return toSerialize, nil
 }
 
@@ -618,6 +931,9 @@ func (o *VerifyResultResponse) UnmarshalJSON(data []byte) (err error) {
 		"disposable",
 		"role",
 		"catch_all",
+		"relay",
+		"parked",
+		"spam_trap",
 		"freshness",
 		"decision",
 	}
