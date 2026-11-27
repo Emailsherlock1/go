@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -110,6 +111,38 @@ func TestUnauthorized(t *testing.T) {
 	}
 	if !apiErr.IsUnauthorized() || apiErr.Code != "unauthorized" {
 		t.Errorf("unexpected error: %+v", apiErr)
+	}
+}
+
+// EM-4994: a 2xx body the generated models refuse (here without the required
+// freshness) is a response problem, not a network one.
+func TestResponseTheModelsRefuseIsInvalidResponse(t *testing.T) {
+	c, srv := newTestClient(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"email":"jane@acme.com","result":"valid","mx":true,"disposable":false,"role":false,"catch_all":false,"relay":false,"parked":false,"spam_trap":false,"score":0.95,"decision":{"recommendation":"allow","reasons":["mailbox_accepts"]}}`))
+	})
+	defer srv.Close()
+
+	_, err := c.Verify.Single(context.Background(), "jane@acme.com")
+	apiErr, ok := err.(*APIError)
+	if !ok {
+		t.Fatalf("want *APIError, got %T", err)
+	}
+	if apiErr.Code != "invalid_response" || apiErr.StatusCode != 200 {
+		t.Errorf("want 200 invalid_response, got %+v", apiErr)
+	}
+	if !strings.Contains(apiErr.Message, "freshness") {
+		t.Errorf("message should name the refused property: %q", apiErr.Message)
+	}
+}
+
+func TestUnreachableServerIsNetworkError(t *testing.T) {
+	c, srv := newTestClient(func(w http.ResponseWriter, r *http.Request) {})
+	srv.Close()
+
+	_, err := c.Verify.Single(context.Background(), "jane@acme.com")
+	apiErr, ok := err.(*APIError)
+	if !ok || apiErr.Code != "network_error" || apiErr.StatusCode != 0 {
+		t.Errorf("want 0 network_error, got %v", err)
 	}
 }
 
