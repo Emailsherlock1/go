@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.5.0
+
+### Added
+
+- `es.ProbeCreditsRemaining()` and `es.ValidationsRemaining()`: the two balances the API reports, read from `X-Probe-Credits-Remaining` and `X-Validations-Remaining` (falling back to the older header names). `ValidationsRemaining()` stays `nil` on a paid plan, where standard verify is unlimited.
+
+### Changed
+
+- `APIError.CreditsRemaining` on a 402 reads `X-Probe-Credits-Remaining` first.
+
+### Deprecated
+
+- `es.CreditsRemaining()`: returns the same value as `ProbeCreditsRemaining()`.
+
 ## 0.4.0
 
 ### Added

@@ -199,12 +199,17 @@ Every field and model is generated from the [OpenAPI spec](https://www.hostsherl
 
 ## Credits and rate limits
 
-After every call:
+Two balances apply. Standard verify draws on your monthly validations, deep verify
+of catch-all and unknown addresses draws probe credits. After every call that
+reports them:
 
 ```go
-es.CreditsRemaining() // *float64, e.g. 41
-es.LastRateLimit()    // RateLimit{Limit, Remaining, Reset}
+es.ProbeCreditsRemaining() // *float64, e.g. 41
+es.ValidationsRemaining()  // *int64, e.g. 950, or nil on a paid plan (unlimited)
+es.LastRateLimit()         // RateLimit{Limit, Remaining, Reset}
 ```
+
+`es.CreditsRemaining()` still returns the probe-credit balance and is deprecated.
 
 ## Errors
 

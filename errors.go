@@ -64,8 +64,19 @@ type errorEnvelope struct {
 	} `json:"error"`
 }
 
-func parseFloatHeader(h http.Header, key string) *float64 {
-	v := h.Get(key)
+// firstHeader returns the value of the first of keys the response carries, so a
+// header can be read under its current name with its older name as fallback.
+func firstHeader(h http.Header, keys ...string) string {
+	for _, k := range keys {
+		if v := h.Get(k); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func parseFloatHeader(h http.Header, keys ...string) *float64 {
+	v := firstHeader(h, keys...)
 	if v == "" {
 		return nil
 	}
@@ -76,8 +87,8 @@ func parseFloatHeader(h http.Header, key string) *float64 {
 	return &f
 }
 
-func parseIntHeader(h http.Header, key string) *int64 {
-	v := h.Get(key)
+func parseIntHeader(h http.Header, keys ...string) *int64 {
+	v := firstHeader(h, keys...)
 	if v == "" {
 		return nil
 	}
@@ -106,7 +117,7 @@ func errorFromResponse(status int, env *errorEnvelope, h http.Header) *APIError 
 		}
 	case http.StatusPaymentRequired:
 		e.CreditsRequired = parseFloatHeader(h, "X-Credits-Required")
-		e.CreditsRemaining = parseFloatHeader(h, "X-Credits-Remaining")
+		e.CreditsRemaining = parseFloatHeader(h, "X-Probe-Credits-Remaining", "X-Credits-Remaining")
 	case http.StatusTooManyRequests:
 		e.RetryAfter = parseIntHeader(h, "Retry-After")
 		e.RateLimit = &RateLimit{

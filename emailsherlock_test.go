@@ -113,6 +113,82 @@ func TestUnauthorized(t *testing.T) {
 	}
 }
 
+const validBody = `{"email":"jane@acme.com","result":"valid","mx":true,"disposable":false,"role":false,"catch_all":false,"relay":false,"parked":false,"spam_trap":false,"score":0.95,"freshness":"fresh","decision":{"recommendation":"allow","reasons":["mailbox_accepts"]}}`
+
+func singleWithHeaders(t *testing.T, headers map[string]string) *Client {
+	t.Helper()
+	c, srv := newTestClient(func(w http.ResponseWriter, r *http.Request) {
+		for k, v := range headers {
+			w.Header().Set(k, v)
+		}
+		w.Write([]byte(validBody))
+	})
+	t.Cleanup(srv.Close)
+	if _, err := c.Verify.Single(context.Background(), "jane@acme.com"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	return c
+}
+
+// EM-4987: the alias X-Credits-Remaining carries another value on purpose, so
+// the test fails if the client still reads the alias first.
+func TestReadsBothBalancesFromTheirCurrentHeaders(t *testing.T) {
+	c := singleWithHeaders(t, map[string]string{
+		"X-Probe-Credits-Remaining": "41",
+		"X-Credits-Remaining":       "7",
+		"X-Validations-Remaining":   "950",
+		"X-Verify-Free-Remaining":   "3",
+	})
+	if p := c.ProbeCreditsRemaining(); p == nil || *p != 41 {
+		t.Errorf("probe credits: %v", p)
+	}
+	if v := c.ValidationsRemaining(); v == nil || *v != 950 {
+		t.Errorf("validations: %v", v)
+	}
+	if cr := c.CreditsRemaining(); cr == nil || *cr != 41 {
+		t.Errorf("deprecated alias: %v", cr)
+	}
+}
+
+func TestFallsBackToTheLegacyBalanceHeaders(t *testing.T) {
+	c := singleWithHeaders(t, map[string]string{"X-Credits-Remaining": "12", "X-Verify-Free-Remaining": "30"})
+	if p := c.ProbeCreditsRemaining(); p == nil || *p != 12 {
+		t.Errorf("probe credits: %v", p)
+	}
+	if v := c.ValidationsRemaining(); v == nil || *v != 30 {
+		t.Errorf("validations: %v", v)
+	}
+}
+
+func TestValidationsStayNilWhenThePlanIsUnlimited(t *testing.T) {
+	c := singleWithHeaders(t, map[string]string{"X-Probe-Credits-Remaining": "41"})
+	if v := c.ValidationsRemaining(); v != nil {
+		t.Errorf("want nil validations, got %d", *v)
+	}
+	if p := c.ProbeCreditsRemaining(); p == nil || *p != 41 {
+		t.Errorf("probe credits: %v", p)
+	}
+}
+
+func TestInsufficientCreditsPrefersProbeCreditsHeader(t *testing.T) {
+	c, srv := newTestClient(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Probe-Credits-Remaining", "2")
+		w.Header().Set("X-Credits-Remaining", "9")
+		w.WriteHeader(402)
+		w.Write([]byte(`{"error":{"code":"insufficient_credits","message":"Not enough."}}`))
+	})
+	defer srv.Close()
+
+	_, err := c.Verify.Single(context.Background(), "a@b.com")
+	apiErr, ok := err.(*APIError)
+	if !ok {
+		t.Fatalf("want *APIError, got %T", err)
+	}
+	if apiErr.CreditsRemaining == nil || *apiErr.CreditsRemaining != 2 {
+		t.Errorf("credits remaining: %v", apiErr.CreditsRemaining)
+	}
+}
+
 func TestInsufficientCredits(t *testing.T) {
 	c, srv := newTestClient(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Credits-Required", "1")

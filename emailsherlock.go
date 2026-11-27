@@ -5,7 +5,7 @@
 //
 // The HTTP client and models are generated from the OpenAPI spec (sub-package
 // genclient); this package is a thin sugar layer over it: APIError with IsXxx
-// predicates, CreditsRemaining / LastRateLimit, an env-var key fallback, and
+// predicates, ProbeCreditsRemaining / ValidationsRemaining / LastRateLimit, an env-var key fallback, and
 // the Verify, Guard, Deliverability, DMARC, TLSRPT, Domains and Impersonation
 // services.
 package emailsherlock
@@ -23,7 +23,7 @@ import (
 
 const (
 	defaultBaseURL = "https://api.emailsherlock.com"
-	version        = "0.4.0"
+	version        = "0.5.0"
 )
 
 // Client talks to the EmailSherlock API. Create one with New. It is safe for
@@ -47,9 +47,10 @@ type Client struct {
 	// Impersonation holds the impersonation scoring endpoint.
 	Impersonation *ImpersonationService
 
-	mu               sync.Mutex
-	creditsRemaining *float64
-	rateLimit        RateLimit
+	mu                    sync.Mutex
+	probeCreditsRemaining *float64
+	validationsRemaining  *int64
+	rateLimit             RateLimit
 }
 
 // errNoKey is returned (without any network call) when the client has no API key.
@@ -153,7 +154,7 @@ func newFromConfig(apiKey string, cfg config) *Client {
 
 // WithClientID returns a new Client that works inside the given tenant, with the
 // same key, base URL and HTTP client. The receiver is unchanged and the two keep
-// separate CreditsRemaining / LastRateLimit state. A non-positive id behaves as
+// separate balance / LastRateLimit state. A non-positive id behaves as
 // in the WithClientID option.
 func (c *Client) WithClientID(id int64) *Client {
 	cfg := c.cfg
@@ -169,12 +170,33 @@ func (c *Client) ClientID() int64 {
 	return 0
 }
 
-// CreditsRemaining returns the credits left after the most recent request, or
-// nil if no request has carried the header yet.
-func (c *Client) CreditsRemaining() *float64 {
+// ProbeCreditsRemaining returns the probe credits left, as the most recent
+// response that carried the balance reported it (X-Probe-Credits-Remaining, or
+// its older name X-Credits-Remaining), or nil if none has yet. Probe credits pay
+// for deep verify of catch-all and unknown addresses.
+func (c *Client) ProbeCreditsRemaining() *float64 {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.creditsRemaining
+	return c.probeCreditsRemaining
+}
+
+// ValidationsRemaining returns the free standard verifies left this month, as
+// the most recent response that carried the balance reported it
+// (X-Validations-Remaining, or its older name X-Verify-Free-Remaining). The API
+// omits the header on a paid plan, where standard verify is unlimited, so it
+// stays nil there.
+func (c *Client) ValidationsRemaining() *int64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.validationsRemaining
+}
+
+// CreditsRemaining returns the same value as ProbeCreditsRemaining, under the
+// name this SDK used before the API split the two balances.
+//
+// Deprecated: since 0.5.0, use ProbeCreditsRemaining or ValidationsRemaining.
+func (c *Client) CreditsRemaining() *float64 {
+	return c.ProbeCreditsRemaining()
 }
 
 // LastRateLimit returns the rate-limit window after the most recent request.
@@ -200,10 +222,11 @@ func do[T any](c *Client, val *T, resp *http.Response, err error) (*T, error) {
 func (c *Client) captureMeta(h http.Header) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if v := h.Get("X-Credits-Remaining"); v != "" {
-		if f, err := strconv.ParseFloat(v, 64); err == nil {
-			c.creditsRemaining = &f
-		}
+	if f := parseFloatHeader(h, "X-Probe-Credits-Remaining", "X-Credits-Remaining"); f != nil {
+		c.probeCreditsRemaining = f
+	}
+	if n := parseIntHeader(h, "X-Validations-Remaining", "X-Verify-Free-Remaining"); n != nil {
+		c.validationsRemaining = n
 	}
 	if h.Get("X-RateLimit-Limit") != "" {
 		c.rateLimit = RateLimit{
