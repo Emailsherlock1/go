@@ -9,6 +9,7 @@
 ### Changed
 
 - `APIError.CreditsRemaining` on a 402 reads `X-Probe-Credits-Remaining` first.
+- A 2xx response the generated models refuse (a required field missing, a wrong type) returns an `*APIError` with `Code` `invalid_response` and the response's `StatusCode`, no longer `network_error` with `StatusCode` 0.
 
 ### Deprecated
 
