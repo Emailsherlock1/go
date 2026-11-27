@@ -27,7 +27,7 @@ func TestSingleOK(t *testing.T) {
 		w.Header().Set("X-RateLimit-Limit", "60")
 		w.Header().Set("X-RateLimit-Remaining", "59")
 		w.Header().Set("X-RateLimit-Reset", "1700000000")
-		w.Write([]byte(`{"email":"jane@acme.com","result":"valid","mx":true,"disposable":false,"role":false,"catch_all":false,"score":0.95,"freshness":"fresh","decision":{"recommendation":"allow","reasons":["mailbox_accepts"]}}`))
+		w.Write([]byte(`{"email":"jane@acme.com","result":"valid","mx":true,"disposable":false,"role":false,"catch_all":false,"relay":false,"parked":false,"spam_trap":false,"score":0.95,"freshness":"fresh","decision":{"recommendation":"allow","reasons":["mailbox_accepts"]}}`))
 	})
 	defer srv.Close()
 
@@ -50,7 +50,7 @@ func TestSingleOK(t *testing.T) {
 // Go fields/accessors expose it without losing any field.
 func TestSingleKeepsWireFields(t *testing.T) {
 	c, srv := newTestClient(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`{"email":"jane@acme.com","result":"valid","mx":true,"mx_record":"mx1.acme.com","disposable":false,"role":false,"catch_all":true,"free_email":false,"score":0.95,"freshness":"fresh","checked_at":"2026-06-09T14:32:00+00:00","decision":{"recommendation":"allow","reasons":["mailbox_accepts"]}}`))
+		w.Write([]byte(`{"email":"jane@acme.com","result":"valid","mx":true,"mx_record":"mx1.acme.com","disposable":false,"role":false,"catch_all":true,"relay":false,"parked":false,"spam_trap":false,"free_email":false,"score":0.95,"freshness":"fresh","checked_at":"2026-06-09T14:32:00+00:00","decision":{"recommendation":"allow","reasons":["mailbox_accepts"]}}`))
 	})
 	defer srv.Close()
 
@@ -74,7 +74,7 @@ func TestSingleKeepsWireFields(t *testing.T) {
 
 func TestBatchMixed(t *testing.T) {
 	c, srv := newTestClient(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`{"results":[{"email":"jane@acme.com","result":"valid","mx":true,"disposable":false,"role":false,"catch_all":false,"freshness":"fresh","decision":{"recommendation":"allow","reasons":["mailbox_accepts"]}},{"email":"nope@","error":"invalid_email"}]}`))
+		w.Write([]byte(`{"results":[{"email":"jane@acme.com","result":"valid","mx":true,"disposable":false,"role":false,"catch_all":false,"relay":false,"parked":false,"spam_trap":false,"freshness":"fresh","decision":{"recommendation":"allow","reasons":["mailbox_accepts"]}},{"email":"nope@","error":"invalid_email"}]}`))
 	})
 	defer srv.Close()
 
@@ -197,7 +197,7 @@ func TestClientIDHeader(t *testing.T) {
 		_, ok := r.Header["X-Client-Id"]
 		present = append(present, ok)
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"email":"a@b.com","result":"valid","mx":true,"disposable":false,"role":false,"catch_all":false,"score":0.95,"freshness":"fresh","decision":{"recommendation":"allow","reasons":["mailbox_accepts"]}}`))
+		w.Write([]byte(`{"email":"a@b.com","result":"valid","mx":true,"disposable":false,"role":false,"catch_all":false,"relay":false,"parked":false,"spam_trap":false,"score":0.95,"freshness":"fresh","decision":{"recommendation":"allow","reasons":["mailbox_accepts"]}}`))
 	}))
 	defer srv.Close()
 	ctx := context.Background()

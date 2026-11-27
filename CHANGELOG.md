@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.4.0
+
+### Added
+
+- `es.Deliverability`: `ListAddresses(ctx)`, `Latest(ctx, id)` (the pre-send gate), `ListChecks(ctx, id, params)`, `GetCheck(ctx, id)`, `SetWebhook(ctx, id, url)` (returns the signing secret once) and `DeleteWebhook(ctx, id)`.
+- `es.DMARC`: `Start(ctx, domain)`, `Check(ctx, domain)`, `Summary(ctx, domain, params)`, `Reports(ctx, domain, params)` and `Sources(ctx, domain, params)`.
+- `es.TLSRPT`: `Reports(ctx, domain, params)`.
+- `es.Domains`: `Changes(ctx, domain, params)` and `NextSteps(ctx, domain)`.
+- `es.Impersonation`: `Analyze(ctx, req)` scores whether a sender poses as one of your protected identities. It consumes credits; every other call added here is free.
+- Optional query parameters go in a `*XxxParams` struct (`ListChecksParams`, `DMARCSummaryParams`, `DMARCReportsParams`, `DMARCSourcesParams`, `TLSRPTReportsParams`, `DomainChangesParams`); pass `nil` for the API defaults.
+- `WithClientID(id)` option and `(*Client).WithClientID(id)` method send the `X-Client-Id` header, so a provider key can work inside one of its tenants. `(*Client).ClientID()` reads it back. A non-positive id makes every call return a `config_error` without a request. (Listed under 0.3.0 before, but 0.3.0 shipped without it.)
+
+### Changed
+
+- The raw client in `genclient` is regenerated from the current spec. Its doc comments now point at https://www.hostsherlock.com/api/docs.
+- `VerifyResult` gains `Relay`, `Parked` and `SpamTrap` (required in the spec, so a response without them fails to decode) plus the optional `RelayProvider`, `SpamTrapType`, `SuggestedCorrection`, `SmtpDiagnosis` and `Degraded`.
+- The User-Agent is `emailsherlock-go/0.4.0`.
+
 ## 0.3.0
 
 The client and models are now generated from the EmailSherlock OpenAPI spec
@@ -9,7 +27,6 @@ over; see the breaking notes below.
 
 ### Added
 
-- `WithClientID(id)` option and `(*Client).WithClientID(id)` method send the `X-Client-Id` header, so a provider key can work inside one of its tenants. `(*Client).ClientID()` reads it back. A non-positive id makes every call return a `config_error` without a request.
 - `es.Credits(ctx)` reads the account status (credit buckets, rate limit, plan, sandbox flag).
 - `es.Verify.SubmitJob(ctx, emails)` and `es.Verify.GetJob(ctx, id)` for asynchronous verification jobs.
 - `es.Guard.RecordEvents(ctx, events)` records Email-Guard decision events.

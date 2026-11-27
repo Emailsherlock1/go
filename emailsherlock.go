@@ -1,11 +1,13 @@
-// Package emailsherlock is the official Go client for the EmailSherlock
-// email-verification API. It verifies one address or a batch over HTTPS with
-// an API key. See https://www.hostsherlock.com/api/docs.
+// Package emailsherlock is the official Go client for the EmailSherlock API.
+// It verifies one address or a batch, and reads Deliverability checks, DMARC
+// and TLS-RPT reports, domain timelines and impersonation scores over HTTPS
+// with an API key. See https://www.hostsherlock.com/api/docs.
 //
 // The HTTP client and models are generated from the OpenAPI spec (sub-package
 // genclient); this package is a thin sugar layer over it: APIError with IsXxx
 // predicates, CreditsRemaining / LastRateLimit, an env-var key fallback, and
-// the Verify / Guard services.
+// the Verify, Guard, Deliverability, DMARC, TLSRPT, Domains and Impersonation
+// services.
 package emailsherlock
 
 import (
@@ -21,7 +23,7 @@ import (
 
 const (
 	defaultBaseURL = "https://api.emailsherlock.com"
-	version        = "0.3.0"
+	version        = "0.4.0"
 )
 
 // Client talks to the EmailSherlock API. Create one with New. It is safe for
@@ -34,6 +36,16 @@ type Client struct {
 	// Verify holds the verify endpoints; Guard holds the Email-Guard endpoints.
 	Verify *VerifyService
 	Guard  *GuardService
+	// Deliverability holds the Deliverability check endpoints.
+	Deliverability *DeliverabilityService
+	// DMARC holds the DMARC setup and report endpoints.
+	DMARC *DMARCService
+	// TLSRPT holds the TLS-RPT report endpoint.
+	TLSRPT *TLSRPTService
+	// Domains holds the timeline and next-steps endpoints of a domain.
+	Domains *DomainsService
+	// Impersonation holds the impersonation scoring endpoint.
+	Impersonation *ImpersonationService
 
 	mu               sync.Mutex
 	creditsRemaining *float64
@@ -131,6 +143,11 @@ func newFromConfig(apiKey string, cfg config) *Client {
 	c := &Client{api: genclient.NewAPIClient(gc), apiKey: apiKey, cfg: cfg}
 	c.Verify = &VerifyService{client: c}
 	c.Guard = &GuardService{client: c}
+	c.Deliverability = &DeliverabilityService{client: c}
+	c.DMARC = &DMARCService{client: c}
+	c.TLSRPT = &TLSRPTService{client: c}
+	c.Domains = &DomainsService{client: c}
+	c.Impersonation = &ImpersonationService{client: c}
 	return c
 }
 

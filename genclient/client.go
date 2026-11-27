@@ -1,7 +1,7 @@
 /*
 EmailSherlock API
 
-Verify one email address or a batch over HTTPS with an API key. Authenticate with the X-API-Key header. Billing is user-level credits; each call returns the remaining balance in the X-Credits-Remaining header.  Sandbox: a key that starts with es_test_ runs in sandbox mode. It returns deterministic fixtured data on the same endpoints and response shape, never spends credits, and marks every response with X-Sandbox: true. The local part drives the verdict so you can test each branch: valid@, invalid@, catch-all@, disposable@, role@, unknown@ and pending@ pin a result (pending@ yields reason verification_pending, the deferred-batch outcome to retry later); ratelimit@ returns 429 and servererror@ returns 503 so you can exercise error handling. On the async jobs endpoint (POST /v1/verify/jobs), put async@ or slowjob@ in the batch and the sandbox reproduces the real submit-poll-complete lifecycle: the submit returns processing and the job completes after a few seconds, so you can build and test your polling loop before going live; without it, sandbox jobs complete immediately. Any other address maps to a stable result. Live keys start with es_live_. Full reference at https://emailsherlock.com/api/docs
+Verify one email address or a batch over HTTPS with an API key. Authenticate with the X-API-Key header. The API is available on the Pro plan and up. Two balances apply. Standard verify draws on your monthly validations (unlimited on a paid plan), reported in the X-Validations-Remaining header. Deep verify of the hard cases (catch-all and unknown addresses) draws probe credits, reported in the X-Probe-Credits-Remaining header. The earlier header names X-Verify-Free-Remaining and X-Credits-Remaining are still sent as aliases with the same values.  Sandbox: a key that starts with es_test_ runs in sandbox mode. It returns deterministic fixtured data on the same endpoints and response shape, never spends credits, and marks every response with X-Sandbox: true. The local part drives the verdict so you can test each branch: valid@, invalid@, catch-all@, disposable@, role@, unknown@ and pending@ pin a result (pending@ yields reason verification_pending, the deferred-batch outcome to retry later); ratelimit@ returns 429 and servererror@ returns 503 so you can exercise error handling. On the async jobs endpoint (POST /v1/verify/jobs), put async@ or slowjob@ in the batch and the sandbox reproduces the real submit-poll-complete lifecycle: the submit returns processing and the job completes after a few seconds, so you can build and test your polling loop before going live; without it, sandbox jobs complete immediately. Any other address maps to a stable result. On POST /v1/impersonation/analyze the sandbox runs the real scoring without our domain records, so domain age, blocklist and DNSBL reasons never appear. Live keys start with es_live_.  Provider accounts: a key of a provider account can work in one of your customer accounts. Send the X-Client-Id header with the numeric id of that customer account, and the call runs in it: usage is booked to that account, the way it is when you work in that account in the dashboard, and jobs and results are stored there. Poll a job with the same header you submitted it with. Without the header the call works in the provider account. The id is in the ID column of your customer list under Customers (/admin/my/clients), and next to the name on each customer's page, each with a copy button. An id your key cannot reach returns 404 client_not_found, the same answer as an id that does not exist. On a key of any other account the header returns 400 client_id_not_allowed. Full reference at https://www.hostsherlock.com/api/docs
 
 API version: 1.0.0
 */
@@ -51,7 +51,15 @@ type APIClient struct {
 
 	AccountAPI *AccountAPIService
 
+	DeliverabilityAPI *DeliverabilityAPIService
+
+	DomainReportsAPI *DomainReportsAPIService
+
+	DomainSetupAPI *DomainSetupAPIService
+
 	GuardAPI *GuardAPIService
+
+	ImpersonationAPI *ImpersonationAPIService
 
 	VerifyAPI *VerifyAPIService
 }
@@ -73,7 +81,11 @@ func NewAPIClient(cfg *Configuration) *APIClient {
 
 	// API Services
 	c.AccountAPI = (*AccountAPIService)(&c.common)
+	c.DeliverabilityAPI = (*DeliverabilityAPIService)(&c.common)
+	c.DomainReportsAPI = (*DomainReportsAPIService)(&c.common)
+	c.DomainSetupAPI = (*DomainSetupAPIService)(&c.common)
 	c.GuardAPI = (*GuardAPIService)(&c.common)
+	c.ImpersonationAPI = (*ImpersonationAPIService)(&c.common)
 	c.VerifyAPI = (*VerifyAPIService)(&c.common)
 
 	return c
