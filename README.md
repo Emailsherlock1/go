@@ -97,6 +97,85 @@ err := es.Guard.RecordEvents(ctx, []map[string]interface{}{
 })
 ```
 
+## Deliverability checks
+
+Read the verdicts of your Deliverability check addresses (free, no credits).
+`Latest` is the gate before a send: the latest cached verdict, no live probe.
+
+```go
+list, err := es.Deliverability.ListAddresses(ctx)
+latest, err := es.Deliverability.Latest(ctx, list.Addresses[0].Id)
+if latest.HasResult {
+	v := latest.GetVerdict()
+	fmt.Println(v.GetScore(), v.GetVerdictBand())
+}
+
+checks, err := es.Deliverability.ListChecks(ctx, 7, &emailsherlock.ListChecksParams{Limit: 20})
+check, err := es.Deliverability.GetCheck(ctx, checks.Checks[0].Id) // check.Result: full audit
+
+hook, err := es.Deliverability.SetWebhook(ctx, 7, "https://hooks.example.com/es")
+if wh, ok := hook.GetWebhookOk(); ok {
+	store(wh.GetSecret()) // the signing secret is shown only in this answer
+}
+_, err = es.Deliverability.DeleteWebhook(ctx, 7)
+```
+
+## DMARC
+
+`Start` watches a domain and returns the DMARC record to publish; `Check` looks
+the record up again (free, no credits). The reads (`Summary`, `Reports`,
+`Sources`) need your account's report address in the domain's DMARC record;
+watching a domain alone does not unlock its reports. Pass `nil` params for the
+API defaults.
+
+```go
+setup, err := es.DMARC.Start(ctx, "acme.com")
+if rec, ok := setup.GetRecordOk(); ok {
+	fmt.Println(rec.GetAction(), rec.GetHost(), rec.GetValue()) // the change to make in DNS
+}
+
+sum, err := es.DMARC.Summary(ctx, "acme.com", &emailsherlock.DMARCSummaryParams{Range: 7})
+reports, err := es.DMARC.Reports(ctx, "acme.com", &emailsherlock.DMARCReportsParams{From: "2026-11-01"})
+sources, err := es.DMARC.Sources(ctx, "acme.com", &emailsherlock.DMARCSourcesParams{Result: "fail"})
+```
+
+## TLS-RPT
+
+Free, no credits. Needs your account's report address in the domain's TLS-RPT
+record:
+
+```go
+tls, err := es.TLSRPT.Reports(ctx, "acme.com", &emailsherlock.TLSRPTReportsParams{Range: 30})
+```
+
+## Domain timeline and next steps
+
+Free, no credits. `Changes` reads the timeline of a domain you watch;
+`NextSteps` needs your account's report address in the domain's DMARC record:
+
+```go
+changes, err := es.Domains.Changes(ctx, "acme.com", nil)
+steps, err := es.Domains.NextSteps(ctx, "acme.com") // steps.UnalignedSources, steps.Findings
+```
+
+## Impersonation
+
+Score whether a sender poses as one of your people or partners. This call
+consumes credits. Only sender header fields are sent, no subject or body:
+
+```go
+req := emailsherlock.ImpersonationRequest{
+	From: "ceo@acme-payments.com",
+	Protected: []emailsherlock.ProtectedIdentity{
+		{Name: "Jane Doe", Domains: []string{"acme.com"}},
+	},
+}
+req.SetDisplayName("Jane Doe")
+
+res, err := es.Impersonation.Analyze(ctx, req)
+fmt.Println(res.Risk, res.Score, res.GetIdentity()) // "high" 75 "Jane Doe"
+```
+
 ## The result object
 
 `VerifyResult` is generated from the spec. Required fields are plain values;
@@ -157,6 +236,9 @@ if err != nil {
 | `IsInsufficientCredits()`       | 402  | `CreditsRequired`, `CreditsRemaining`    |
 | `IsRateLimited()`               | 429  | `RetryAfter`, `RateLimit`                |
 | `IsUnavailable()`               | 503  | credit auto-refunded                     |
+
+Other statuses (400, 404, 409, 422, 500) have no predicate; read `StatusCode`
+and `Code`.
 
 ## Working for a tenant (`X-Client-Id`)
 
