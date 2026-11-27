@@ -158,6 +158,33 @@ if err != nil {
 | `IsRateLimited()`               | 429  | `RetryAfter`, `RateLimit`                |
 | `IsUnavailable()`               | 503  | credit auto-refunded                     |
 
+## Working for a tenant (`X-Client-Id`)
+
+A provider account's key can run a call inside one of its tenants by naming the
+tenant's numeric id. Usage, verify jobs, deliverability addresses and Guard
+events then land in that tenant. Without it, the key works in its own account.
+
+```go
+// As an option:
+es := emailsherlock.New(key, emailsherlock.WithClientID(4711))
+
+// Or derive a client for a tenant from an existing one:
+tenant := es.WithClientID(4711) // new client, same key and settings; es is unchanged
+tenant.ClientID()               // 4711 (0 means no tenant)
+```
+
+Poll a job with the same client you submitted it with, because the job belongs
+to that tenant. The id must be positive; otherwise every call returns an
+`*APIError` with code `config_error` and sends nothing.
+
+The server answers with:
+
+- 404 `client_not_found` for any id your key may not reach.
+- 403 `forbidden` if that tenant is blocked from the API.
+- 400 `client_id_not_allowed` if the key is not a provider key.
+
+Read the code from `APIError.Code`.
+
 ## Options
 
 ```go
